@@ -1,0 +1,65 @@
+*security
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT
+*raw
+:PREROUTING ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT
+*nat
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+COMMIT
+*mangle
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+COMMIT
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:CLEANUP - [0:0]
+:CLOUDFLARE - [0:0]
+:GLOBAL-TCP - [0:0]
+:GLOBAL-UDP - [0:0]
+:INIT - [0:0]
+:RESTRICTED-TCP - [0:0]
+:RESTRICTED-UDP - [0:0]
+:RESTRICTED-ZONE - [0:0]
+:SG-ZONE - [0:0]
+:ZONE-FILTER - [0:0]
+[0:0] -A INPUT -j INIT
+[0:0] -A CLEANUP -p udp -j REJECT --reject-with icmp-port-unreachable
+[0:0] -A CLEANUP -p tcp -j REJECT --reject-with tcp-reset
+[0:0] -A CLEANUP -j REJECT --reject-with icmp-proto-unreachable
+[0:0] -A CLEANUP -j DROP
+[0:0] -A GLOBAL-TCP -p tcp -m multiport --dports 80,443 -j CLOUDFLARE
+[0:0] -A GLOBAL-TCP -p tcp -m multiport --dports 80,443 -j ACCEPT
+[0:0] -A GLOBAL-TCP -j ZONE-FILTER
+[0:0] -A GLOBAL-UDP -j ZONE-FILTER
+[0:0] -A INIT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+[0:0] -A INIT -i lo -j ACCEPT
+[0:0] -A INIT -p ipv6 -j ZONE-FILTER
+[0:0] -A INIT -m conntrack --ctstate INVALID -j DROP
+[0:0] -A INIT -p icmp -m icmp --icmp-type 8 -m conntrack --ctstate NEW -j ZONE-FILTER
+[0:0] -A INIT -p udp -m conntrack --ctstate NEW -j GLOBAL-UDP
+[0:0] -A INIT -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -m conntrack --ctstate NEW -j GLOBAL-TCP
+[0:0] -A INIT -j DROP
+[0:0] -A RESTRICTED-TCP -p tcp -m multiport --dports 22 -j ACCEPT
+[0:0] -A RESTRICTED-TCP -j CLEANUP
+[0:0] -A RESTRICTED-UDP -p udp -m multiport --dports 60000:61000 -j ACCEPT
+[0:0] -A RESTRICTED-UDP -j CLEANUP
+[0:0] -A RESTRICTED-ZONE -p icmp -j ACCEPT
+[0:0] -A RESTRICTED-ZONE -p tcp -j RESTRICTED-TCP
+[0:0] -A RESTRICTED-ZONE -p udp -j RESTRICTED-UDP
+[0:0] -A RESTRICTED-ZONE -j CLEANUP
+[0:0] -A ZONE-FILTER -s 118.189.119.118 -j RESTRICTED-ZONE
+[0:0] -A ZONE-FILTER -j SG-ZONE
+[0:0] -A ZONE-FILTER -j DROP
+COMMIT

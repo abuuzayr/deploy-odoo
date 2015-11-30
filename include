@@ -1,0 +1,30 @@
+# !!! TRIPLE CHECK VARIABLES SET IN THIS FILE, OR ELSE THINGS MAY BE RUN AS
+# !!! ROOT ON A DIFFERENT HOST!
+
+# Server Information
+export hostname='srv6.groventure.com'
+export ssh_port='22'
+
+# Odoo Information
+export odoo_hostname='dreamwrkz.com.sg'
+export admin_passwd='NCQxzRiK2vWdYB5GpTjd8cu6ycqbABdxBgpGkenBraJ3f5xSYjdCj7gjqNNm2HWQ'
+export db_name='dreamwrkz'
+export db_password='BrAFTahMMyVs7C9yB85U2cftUDPf2BfFrqTqqhd7ooShNFeXhK3co3zuSD2y9DVF'
+export dbfilter="${db_name}"
+export git_repo='git@bitbucket.org:gvitodoo/singapore-localisation.git'
+
+# Postgresql
+export postgresql_db_name="${db_name}"
+export postgresql_password="${db_password}"
+
+# Timezone under /usr/share/zoneinfo
+export timezone='Asia/Singapore'
+
+# SSL Cert Information
+export ssl_c='SG'
+export ssl_st='Singapore'
+export ssl_l='Singapore'
+export ssl_o='Dreamwrkz Marketing Pte. Ltd.'
+export ssl_cn="${odoo_hostname}"
+
+# vim:set ft=sh:

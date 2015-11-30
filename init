@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+dir_to_this="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "$dir_to_this" ]]; then
+  echo "Somehow \$dir_to_this isn't set, cannot continue." >&2
+  exit 1
+fi
+
+. "$dir_to_this/include"
+
+# My hostname cannot be equal to the hostname defined in the config.
+if [[ "$(hostname)" == "${hostname}" ]]; then
+  echo 'This script must be run on local machine, not on the server' >&2
+  exit 1
+fi
+
+# Exit if root.
+if [[ "$EUID" -eq 0 ]]; then
+  echo 'This script cannot be run as root.' >&2
+  exit 1
+fi
+
+ssh-copy-id "root@${hostname}"
+rsync \
+  --delete \
+  --exclude 'init' \
+  --exclude 'webmaster@groventure.com.id_rsa.pub' \
+  --delete-excluded \
+  -rltvuze "ssh -p '${ssh_port}'" \
+  "${dir_to_this}" \
+  "root@${hostname}:~"
+
+set +e
+# vim:set ft=sh:

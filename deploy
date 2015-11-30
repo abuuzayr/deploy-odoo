@@ -1,0 +1,342 @@
+#!/bin/bash
+set -e
+
+export DEBIAN_FRONTEND='noninteractive'
+
+dir_to_this="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ -z "$dir_to_this" ]]; then
+  echo 'Somehow $dir_to_this isn'"'"'t set, cannot continue.' >&2
+  exit 1
+fi
+
+. "$dir_to_this/include"
+
+# Exit if not root.
+if [[ "$EUID" -ne 0 ]]; then
+  echo 'This script should be run as root.' >&2
+fi
+
+aptinstallargs='--no-install-recommends -y'
+
+echo 'Installing /etc/apt/sources.list'
+install -Zm 0644 -o root -g root "${dir_to_this}/sources.list" '/etc/apt/sources.list'
+
+echo 'Running apt-get update...'
+apt-get update
+
+#echo 'Running apt-get dist-upgrade...'
+apt-get dist-upgrade -y
+
+if [[ -z "$(dpkg -l | egrep '^ii\s+dbus')" ]]; then
+  echo 'DBus is not installed, installing package "dbus"'
+  apt-get install ${aptinstallargs} dbus
+fi
+
+echo 'Setting hostname to "'"${hostname}"'"...'
+hostnamectl set-hostname "${hostname}"
+
+# Somehow this command is successful but still returns 1, idk why.
+# See `man 1 hostnamectl`
+set +e
+echo 'Setting icon name to "'"${hostname}"'"...'
+hostnamectl set-icon-name "${hostname}"
+set -e
+
+echo 'Setting time zone name to "'"${timezone}"'"...'
+ln -svf "/usr/share/zoneinfo/${timezone}" /etc/localtime
+
+echo 'Installing iptables-persistent...'
+apt-get install ${aptinstallargs} iptables-persistent curl ca-certificates
+
+echo 'Installing iptables files...'
+install -DZvm 0644 "${dir_to_this}/rules.v4" /etc/iptables/rules.v4
+
+echo 'Installing ip6tables files...'
+install -DZvm 0644 "${dir_to_this}/rules.v6" /etc/iptables/rules.v6
+
+echo 'Installing iptables-sg-zone script...'
+install -DZvm 0750 "${dir_to_this}/iptables-sg-zone" '/usr/local/bin/iptables-sg-zone'
+
+echo 'Installing ip6tables-sg-zone script...'
+install -DZvm 0750 "${dir_to_this}/ip6tables-sg-zone" '/usr/local/bin/ip6tables-sg-zone'
+
+echo 'Applying ipv4 rules...'
+iptables-restore < /etc/iptables/rules.v4
+
+echo 'Applying ipv6 rules...'
+ip6tables-restore < /etc/iptables/rules.v6
+
+echo 'Allowing Singapore IP Zones for ipv4...'
+iptables-sg-zone
+
+echo 'Allowing Singapore IP Zones for ipv6...'
+ip6tables-sg-zone
+
+echo 'Saving iptables rules for ipv4...'
+iptables-save > /etc/iptables/rules.v4
+
+echo 'Saving iptables rules for ipv6...'
+ip6tables-save > /etc/iptables/rules.v6
+
+if [[ -n "$(crontab -l | fgrep 'iptables-sg-zone')" ]]; then
+  echo 'iptables-sg-zone entry already exist in crontab, skipping adding to crontab...'
+else
+  echo 'Installing crontab entry for iptables-sg-zone...'
+  (crontab -l; echo '0 4 * * * /usr/local/bin/iptables-sg-zone') | crontab
+fi
+
+if [[ -n "$(crontab -l | fgrep 'ip6tables-sg-zone')" ]]; then
+  echo 'ip6tables-sg-zone entry already exist in crontab, skipping adding to crontab...'
+else
+  echo 'Installing crontab entry for ip6tables-sg-zone...'
+  (crontab -l; echo '1 4 * * * /usr/local/bin/ip6tables-sg-zone') | crontab
+fi
+
+echo 'Installing postgresql...'
+apt-get install ${aptinstallargs} postgresql
+
+defined_postgresql_odoo="$(su -c 'psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='"'"'odoo'"'"'"' - postgres)"
+if [[ "${defined_postgresql_odoo}" -eq 1 ]]; then
+  echo 'Postgresql "odoo" user already exist, skipping user creation...'
+else
+  echo "Creating postgresql user 'odoo'..."
+  #su -c 'createuser --createdb odoo' - postgres
+  su -c 'createuser odoo' - postgres
+  su - postgres <<EOF
+  psql -c 'ALTER USER odoo WITH PASSWORD '"'"'${postgresql_password}'"'"
+EOF
+fi
+
+if [[ -z "$(apt-key list | fgrep 'info@odoo.com')" ]]; then
+  echo 'Importing the odoo public key...'
+  curl -SsL 'https://nightly.odoo.com/odoo.key' | apt-key add -
+else
+  echo 'Odoo public key already imported, skipping...'
+fi
+
+echo 'Adding the odoo repository...'
+echo 'deb http://nightly.odoo.com/8.0/nightly/deb/ ./' > \
+  /etc/apt/sources.list.d/odoo-8.list
+
+echo 'Running apt-get update...'
+apt-get update
+
+echo "Installing odoo..."
+apt-get install ${aptinstallargs} odoo
+
+echo 'Stopping odoo daemon because it is started by update-alternatives...'
+systemctl stop odoo
+
+echo "Installing python-xlrd..."
+apt-get install ${aptinstallargs} python-xlrd
+
+if [[ -z "$(dpkg -l | egrep 'ii\s+wkhtmltox')" ]]; then
+  echo 'Installing wkhtmltox from https://nightly.odoo.com/extra/'
+  set -x
+  curl -SsL \
+    'https://nightly.odoo.com/extra/wkhtmltox-0.12.2.1_linux-jessie-amd64.deb' \
+    -o "${dir_to_this}/wkhtmltox.deb"
+  set +e
+  dpkg -i "${dir_to_this}/wkhtmltox.deb"
+  set -e
+  rm -f "${dir_to_this}/wkhtmltox.deb"
+  apt-get install -f ${aptinstallargs}
+  set +x
+else
+  echo 'wkhtmltox already installed, skipping...'
+fi
+
+set +e
+db_exists="$(su - postgres -c 'psql -c '"'"'\l'"'" | fgrep "${postgresql_db_name}")"
+set -e
+if [[ -z "$db_exists" ]]; then
+  echo 'Creating postgresql db "'"${postgresql_db_name}"'"...'
+  su - postgres <<EOF
+  set -x
+  set -e
+  createdb '${postgresql_db_name}'
+  psql -c 'ALTER DATABASE ${postgresql_db_name} OWNER TO odoo'
+  set +e
+  set -x
+EOF
+else
+  echo 'Postgresql db "'"${postgresql_db_name}"'" already exists, skipping...'
+fi
+
+if [[ -n "$(egrep '^odoo-team' /etc/passwd)" ]]; then
+  echo 'User "odoo-team" already exists, skipping creation...'
+else
+
+  echo 'Creating user "odoo-team"...'
+  if [[ -z "$(egrep '^odoo-team' /etc/group)" ]]; then
+    set -x
+    useradd -m odoo-team -s /bin/bash
+    set +x
+  else
+    set -x
+    useradd -m -g odoo-team odoo-team -s /bin/bash
+    set +x
+  fi
+
+  echo 'Changing password for user "odoo-team"...'
+  set -x
+  passwd odoo-team
+  set +x
+fi
+
+if [[ -z "$(groups odoo | fgrep odoo-team)" ]]; then
+  echo 'Adding user "odoo" to group "odoo-team"...'
+  set -x
+  gpasswd -a odoo odoo-team
+  set +x
+else
+  echo 'User "odoo" is already group of "odoo-team", skipping...'
+fi
+
+if [[ -z "$(groups odoo-team | fgrep odoo)" ]]; then
+  echo 'Adding user "odoo-team" to group "odoo"...'
+  set -x
+  gpasswd -a odoo-team odoo
+  set +x
+else
+  echo 'User "odoo-team" is already group of "odoo", skipping...'
+fi
+
+echo 'Installing the addons folder in "odoo-team" home folder...'
+set -x
+install -dZm 1750 -o odoo-team -g odoo-team /home/odoo-team/addons
+set +x
+
+echo 'Installing the .ssh folder for "odoo-team"'
+set -x
+install -dZm 1700 -o odoo-team -g odoo-team /home/odoo-team/.ssh
+set +x
+
+echo 'Installing the webmaster@groventure.com private key...'
+set -x
+install -Zm 1600 -o odoo-team -g odoo-team "${dir_to_this}/webmaster@groventure.com.id_rsa" /home/odoo-team/.ssh/webmaster@groventure.com.id_rsa
+set +x
+
+echo 'Installing the ssh config for "odoo-team"...'
+set -x
+install -Zm 0600 -o odoo-team -g odoo-team "${dir_to_this}/ssh_config" /home/odoo-team/.ssh/config
+set +x
+
+echo 'Patching /etc/ssh/sshd_config...'
+set -x
+sed -ir 's/^PasswordAuthentication\s+yes\s*$/PasswordAuthentication no/g' /etc/ssh/sshd_config
+if [[ -z "$(fgrep Match User odoo-team)" ]]; then
+  echo "Match User odoo-team\nPasswordAuthentication yes" >> /etc/ssh/sshd_config
+fi
+set +x
+
+#echo 'Installing git...'
+#apt-get install ${aptinstallargs} git
+
+#if [[ -e '/home/odoo/.git' ]]; then
+#  echo 'odoo-team addons repository already exists, pulling updates instead...'
+#  su - odoo-team <<EOF
+#  set -e
+#  set -x
+#  git pull --rebase
+#  set +x
+#  set +e
+#EOF
+#else
+#  echo 'Cloning the odoo-team addons into "~/addons"...'
+#  su - odoo-team <<EOF
+#  set -e
+#  set -x
+#  cd ~/addons
+#  git init
+#  git remote add origin "${git_repo}"
+#  git fetch origin
+#  git checkout -b master --track origin/master
+#  git reset origin/master
+#  set +x
+#  set +e
+#EOF
+#fi
+
+echo 'Installing openerp-server.conf...'
+install -Zm 0640 -o root -g odoo "${dir_to_this}/openerp-server.conf" '/etc/odoo/openerp-server.conf'
+
+echo 'Patching openerp-server.conf...'
+set -x
+sed -ir "s/{{ admin_passwd }}/${admin_passwd}/g" /etc/odoo/openerp-server.conf
+sed -ir "s/{{ db_name }}/${db_name}/g" /etc/odoo/openerp-server.conf
+sed -ir "s/{{ db_password }}/${db_password}/g" /etc/odoo/openerp-server.conf
+sed -ir "s/{{ dbfilter }}/${dbfilter}/g" /etc/odoo/openerp-server.conf
+sed -ir "s/{{ timezone }}/$(echo "${timezone}" | sed -r 's/\//\\\//g')/g" /etc/odoo/openerp-server.conf
+set +x
+
+#echo 'Changing shell of user odoo to /bin/bash...'
+#chsh odoo -s /bin/bash
+
+#echo 'Installing odoo addons...'
+#su - odoo <<EOF
+#  set -x
+#  openerp-server --config /etc/odoo/openerp-server.conf --stop-after-init --init 'all' -d '${db_name}'
+#  set +x
+#EOF
+
+#openerp-server --config /etc/odoo/openerp-server.conf --stop-after-init --init '$(ls /home/odoo-team/addons/ | xargs echo | sed -r 's/\s+/,/g')'
+#echo 'Changing shell of user odoo to /bin/false...'
+#chsh odoo -s /bin/false
+
+echo 'Installing nginx...'
+apt-get install ${aptinstallargs} nginx
+
+echo 'Removing the default site...'
+rm -vf '/etc/nginx/sites-available/default'
+rm -vf '/etc/nginx/sites-enabled/default'
+
+echo 'Installing our nginx config file...'
+install -DZvm 0640 "${dir_to_this}/nginx.conf" '/etc/nginx/nginx.conf'
+
+echo 'Installing odoo nginx config file...'
+install -DZvm 0640 "${dir_to_this}/odoo-nginx.conf" '/etc/nginx/sites-available/odoo'
+
+echo 'Enabling the odoo nginx site profile...'
+(cd /etc/nginx/sites-enabled && ln -svf ../sites-available/odoo)
+
+echo 'Patching odoo nginx config file to include customer'"'"'s hostname'
+sed -ir "s/{{ odoo_hostname }}/${odoo_hostname}/g" '/etc/nginx/sites-available/odoo'
+
+mkdir -pv /etc/nginx/certs
+if [[ -e '/etc/nginx/certs/default.key' || -e '/etc/nginx/certs/default.crt' ]]; then
+  echo 'Self-signed Nginx SSL certificates exist, skipping generation...'
+else
+  echo 'Generating Nginx self-signed certificate...'
+  openssl req \
+    -x509 \
+    -newkey rsa:2048 \
+    -days 365 \
+    -nodes \
+    -subj "/C=${ssl_c}/ST=${ssl_st}/L=${ssl_l}/O=${ssl_o}/CN=${ssl_cn}" \
+    -keyout /etc/nginx/certs/default.key \
+    -out /etc/nginx/certs/default.crt
+fi
+
+echo 'Checking if nginx files are fine...'
+nginx -t
+
+echo 'Restarting Nginx service to reflect new changes...'
+systemctl restart nginx
+
+echo 'All done. Start the odoo daemon when you are ready.'
+
+set +e
+# vim:set ft=sh:
+
+# PasswordAuthentication no
+# Match User odoo-team
+# PasswordAuthentication yes
+# install patched wkhtmltox from https://nightly.odoo.com/extra/
+# workers = 0
+# db_name and db_filter define to 1
+# addons_path + home
+# set admin_passwd
+# backup script
+#echo 'update ir_config_parameter set value = '"'"'https://dreamwrkz.com.sg'"'"' where key = '"'"'web.base.url'"'"';' | psql dreamwrkz

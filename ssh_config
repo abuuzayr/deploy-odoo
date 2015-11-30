@@ -1,0 +1,9 @@
+host bitbucket.org
+  Hostname bitbucket.org
+  User git
+  IdentityFile ~/.ssh/webmaster@groventure.com.id_rsa
+
+host git.groventure.com
+  Hostname git.groventure.com
+  User git
+  IdentityFile ~/.ssh/webmaster@groventure.com.id_rsa

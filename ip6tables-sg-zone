@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+ip6tables -F SG-ZONE
+curl -SsL 'http://www.ipdeny.com/ipv6/ipaddresses/blocks/sg.zone' | xargs -I% ip6tables -A SG-ZONE -s % -j RESTRICTED-ZONE
+
+set +e

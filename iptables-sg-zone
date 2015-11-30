@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+iptables -F SG-ZONE
+curl -SsL 'http://www.ipdeny.com/ipblocks/data/aggregated/sg-aggregated.zone' | xargs -I% iptables -A SG-ZONE -s % -j RESTRICTED-ZONE
+
+set +e
